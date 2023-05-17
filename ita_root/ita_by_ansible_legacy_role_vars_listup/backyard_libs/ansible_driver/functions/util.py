@@ -26,7 +26,7 @@ from backyard_libs.ansible_driver.classes.VariableManagerClass import VariableMa
 """
 
 
-def extract_variable_for_movement(mov_records, mov_matl_lnk_records, registerd_role_records, role_varmgr_dict):
+def extract_variable_for_movement(mov_records, mov_matl_lnk_records, registerd_role_records, role_varmgr_dict, ws_db):
     """
     変数を抽出する（movement）
 
@@ -45,9 +45,19 @@ def extract_variable_for_movement(mov_records, mov_matl_lnk_records, registerd_r
 
     key_convert_dict = {x['ROLE_ID']: (x['ROLE_NAME'], x['ROLE_PACKAGE_ID']) for x in registerd_role_records.values()}
 
-    var_extractor = WrappedStringReplaceAdmin()
+    var_extractor = WrappedStringReplaceAdmin(ws_db)
+    disuse_movement = []
     for matl_lnk in mov_matl_lnk_records.values():
         movement_id = matl_lnk['MOVEMENT_ID']
+
+        # データ不整合（Movement-ロール紐づけ管理のレコードのMovement_idが存在しない(廃止されている)）
+        if movement_id in disuse_movement:
+            continue
+        if movement_id not in mov_vars_dict:
+            debug_msg = g.appmsg.get_log_message("MSG-10266", [movement_id])
+            g.applogger.debug(debug_msg)
+            disuse_movement.append(movement_id)
+            continue
         mov_vars_mgr = mov_vars_dict[movement_id]
 
         # ロール変数の追加
@@ -59,14 +69,16 @@ def extract_variable_for_movement(mov_records, mov_matl_lnk_records, registerd_r
                 mov_vars_mgr.merge_variable_list(role_varmgr.export_var_list())
             else:
                 # データ不整合（ロールパッケージ管理のVAR_STRUCT_ANAL_JSON_STRINGカラム内 "Role_name_list" に無いロールがMovementロール紐づけに存在）
-                g.applogger.debug("Data mismatch between role_package table(json_string column) and material_link table.")
+                debug_msg = g.appmsg.get_log_message("BKY-30009", [matl_lnk['MVMT_MATL_LINK_ID']].extend(list(role_varmgr_key)))
+                g.applogger.debug(debug_msg)
 
         else:
             # データ不整合（ロール名管理に無いデータがMovementロール紐づけに存在）
-            g.applogger.debug("Data mismatch between role_name table and material_link table.")
+            debug_msg = g.appmsg.get_log_message("BKY-30010", [matl_lnk['MVMT_MATL_LINK_ID']])
+            g.applogger.debug(debug_msg)
 
         # Movementの追加オプションの変数の追加
-        ans_exec_options = mov_records[movement_id]['ANS_EXEC_OPTIONS']
+        ans_exec_options = mov_records[movement_id]['ANS_PLAYBOOK_HED_DEF']
 
         var_heder_id = AnscConst.DF_HOST_VAR_HED  # VAR変数
         mt_varsLineArray = []  # [{行番号:変数名}, ...]
@@ -101,14 +113,19 @@ def extract_variable_for_execute(mov_vars_dict, tpl_varmng_dict, device_varmng_d
     """
     g.applogger.debug("[Trace] Call util.extract_variable_for_execute()")
 
-    sub_value_auto_reg = SubValueAutoReg()
-    _, template_list, host_list = sub_value_auto_reg.get_data_from_all_parameter_sheet(WS_DB=ws_db)
+    driver_type = AnscConst.DF_LEGACY_ROLE_DRIVER_ID
+    sub_value_auto_reg = SubValueAutoReg(driver_type, ws_db)
+    _, template_list, host_list = sub_value_auto_reg.get_data_from_all_parameter_sheet()
     # template_list = { MovementID: { TPF変数名: 0 }, … }
     # host_list = { MovementID: { OPERATION_ID: { SYSTEM_ID: 0 }, … }, … }
 
     for movement_id, tpl_var_set in template_list.items():
-        tpl_var_name = tpl_var_set.keys()[0]
-        mov_vars_dict[movement_id].merge_variable_list(tpl_varmng_dict[tpl_var_name].export_var_list())
+        tpl_var_name = list(tpl_var_set.keys())[0]
+        if tpl_var_name in tpl_varmng_dict:
+            mov_vars_dict[movement_id].merge_variable_list(tpl_varmng_dict[tpl_var_name].export_var_list())
+        else:
+            debug_msg = g.appmsg.get_log_message("MSG-10531", [tpl_var_name])
+            g.applogger.debug(debug_msg)
 
     for movement_id, ope_host_dict in host_list.items():
         for _, system_dict in ope_host_dict.items():

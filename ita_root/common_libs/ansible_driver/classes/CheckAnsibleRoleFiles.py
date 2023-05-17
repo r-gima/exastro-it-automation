@@ -34,8 +34,8 @@ from common_libs.ansible_driver.classes.VarStructAnalJsonConvClass import VarStr
 from common_libs.ansible_driver.classes.AnsibleMakeMessage import AnsibleMakeMessage
 from common_libs.ansible_driver.classes.YamlParseClass import YamlParse
 from common_libs.ansible_driver.functions.util import get_AnsibleDriverTmpPath, getFileupLoadColumnPath
+from common_libs.ansible_driver.functions.util import get_AnsibleDriverHpTmpPath, AnsibleFilesClean
 from common_libs.ansible_driver.classes.WrappedStringReplaceAdmin import WrappedStringReplaceAdmin
-
 #################################################################################
 # rolesディレクトリ解析
 #################################################################################
@@ -61,7 +61,7 @@ class CheckAnsibleRoleFiles():
         """
 
         self.lva_rolename = []
-        self.lva_varname = {}
+        self.lva_itavarname = {}
         self.lv_get_rolevar = None
         self.lv_lasterrmsg = []
         self.lv_objMTS = in_objMTS
@@ -74,19 +74,19 @@ class CheckAnsibleRoleFiles():
         self.php_keys = lambda x: x.keys() if isinstance(x, dict) else range(len(x))
         self.php_vals = lambda x: x.values() if isinstance(x, dict) else x
 
-    def getvarname(self):
+    def getITAvarsname(self):
 
         """
         処理内容
-          zipファイル内で定義されているロール変数名を取得
+          zipファイル内で定義されているITA変数名を取得
         パラメータ
           なし
         戻り値
-          ロール変数名配列
-          lva_varname[role名][変数名]=0
+          ITA変数名配列
+          lva_itavarname[role名][変数名]=0
         """
 
-        return self.lva_varname
+        return self.lva_itavarname
 
     def getglobalvarname(self):
 
@@ -227,8 +227,8 @@ class CheckAnsibleRoleFiles():
         # role名一覧 初期化
         del self.lva_rolename[:]
 
-        # role変数名一覧 初期化
-        self.lva_varname.clear()
+        # role内ITA独自変数名一覧 初期化
+        self.lva_itavarname.clear()
 
         # roleグローバル変数名一覧
         self.lva_globalvarname.clear()
@@ -353,11 +353,14 @@ class CheckAnsibleRoleFiles():
         # role名退避
         self.lva_rolename.append(in_role_name)
 
+        objdbca = DBConnectWs()
+        WrappedStringReplaceAdminObj = WrappedStringReplaceAdmin(objdbca)
+        objdbca.db_disconnect()
         ret, ina_def_vars_list, ina_def_varsval_list, ina_def_array_vars_list, ina_copyvars_list, ina_tpfvars_list, ina_ITA2User_var_list, ina_User2ITA_var_list = self.chkRoleSubDirectory(
             in_base_dir, fullpath, ina_system_vars, in_role_pkg_name, in_role_name,
             ina_def_vars_list, ina_def_varsval_list, ina_def_array_vars_list,
             in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list,
-            ina_ITA2User_var_list, ina_User2ITA_var_list
+            ina_ITA2User_var_list, ina_User2ITA_var_list, WrappedStringReplaceAdminObj
         )
         if not ret:
             return False, ina_def_vars_list, ina_def_varsval_list, ina_def_array_vars_list, ina_copyvars_list, ina_tpfvars_list, ina_ITA2User_var_list, ina_User2ITA_var_list
@@ -369,7 +372,7 @@ class CheckAnsibleRoleFiles():
         in_base_dir, in_dir, ina_system_vars, in_role_pkg_name, in_rolename,
         ina_def_vars_list, ina_def_varsval_list, ina_def_array_vars_list,
         in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list,
-        ina_ITA2User_var_list, ina_User2ITA_var_list
+        ina_ITA2User_var_list, ina_User2ITA_var_list, WrappedStringReplaceAdminObj
     ):
 
         """
@@ -476,6 +479,9 @@ class CheckAnsibleRoleFiles():
             yaml_parse_array = obj.Parse(user_vars_file)
             errmsg = obj.GetLastError()
             obj = None
+            if yaml_parse_array is None:
+                yaml_parse_array = {}
+
             if yaml_parse_array is False:
                 # ITA readmeのYAML解析で想定外のエラーが発生しました。(ロールパッケージ名:{} role:{} file:{})
                 errmsg = "%s\n%s" % (
@@ -485,10 +491,19 @@ class CheckAnsibleRoleFiles():
                 self.SetLastError(os.path.basename(inspect.currentframe().f_code.co_filename), inspect.currentframe().f_lineno, errmsg)
                 return False, ina_def_vars_list, ina_def_varsval_list, ina_def_array_vars_list, ina_copyvars_list, ina_tpfvars_list, ina_ITA2User_var_list, ina_User2ITA_var_list
 
+            if type(yaml_parse_array) is list:
+                # MSG-10935　"ITA readmeに変数名が定義されていません。(ロールパッケージ名:{} role:{} file:{})",
+                errmsg = "%s" % (
+                    g.appmsg.get_api_message("MSG-10935", [self.lva_msg_role_pkg_name, in_rolename, tgt_file_name])
+                )
+                self.SetLastError(os.path.basename(inspect.currentframe().f_code.co_filename), inspect.currentframe().f_lineno, errmsg)
+                return False, ina_def_vars_list, ina_def_varsval_list, ina_def_array_vars_list, ina_copyvars_list, ina_tpfvars_list, ina_ITA2User_var_list, ina_User2ITA_var_list
+
             parent_vars_list = {}
             errmsg = ""
             f_line = ""
             f_name = ""
+
             ret, parent_vars_list, errmsg, f_name, f_line = chkObj.FirstAnalysis(
                 yaml_parse_array, tgt_role_pkg_name, tgt_role_name, tgt_file_name,
                 ina_ITA2User_var_list[in_rolename], ina_User2ITA_var_list[in_rolename],
@@ -516,7 +531,7 @@ class CheckAnsibleRoleFiles():
                 errmsg = '%s(%s)' % (errmsg, f_line)
                 self.SetLastError(os.path.basename(inspect.currentframe().f_code.co_filename), inspect.currentframe().f_lineno, errmsg)
                 return False, ina_def_vars_list, ina_def_varsval_list, ina_def_array_vars_list, ina_copyvars_list, ina_tpfvars_list, ina_ITA2User_var_list, ina_User2ITA_var_list
-            
+
             # ita readmeに定義されている変数(親)を取り出す
             for parent_var_name, parent_var_info in parent_vars_list.items():
                 all_parent_vars_list[parent_var_name] = 0
@@ -544,7 +559,7 @@ class CheckAnsibleRoleFiles():
                 # p5:TPF/CPF変数取得有(true)/無(false)
                 # p6:ファイル文字コードチェック有(true)/無(false)
                 ret, ina_copyvars_list, ina_tpfvars_list = self.chkRoleFiles(
-                    fullpath, in_rolename, file,
+                    WrappedStringReplaceAdminObj, fullpath, in_rolename, file,
                     # p1    p2    p3    p4    p5    p6
                     True, True, True, True, True, True,
                     in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
@@ -552,7 +567,7 @@ class CheckAnsibleRoleFiles():
 
             elif file == "handlers":
                 ret, ina_copyvars_list, ina_tpfvars_list = self.chkRoleFiles(
-                    fullpath, in_rolename, file,
+                    WrappedStringReplaceAdminObj, fullpath, in_rolename, file,
                     # p1    p2     p3    p4    p5    p6
                     True, False, True, True, True, True,
                     in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
@@ -560,7 +575,7 @@ class CheckAnsibleRoleFiles():
 
             elif file == "templates":
                 ret, ina_copyvars_list, ina_tpfvars_list = self.chkRoleFiles(
-                    fullpath, in_rolename, file,
+                    WrappedStringReplaceAdminObj, fullpath, in_rolename, file,
                     # p1    p2     p3    p4    p5    p6
                     True, False, True, True, True, False,
                     in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
@@ -568,7 +583,7 @@ class CheckAnsibleRoleFiles():
 
             elif file == "meta":
                 ret, ina_copyvars_list, ina_tpfvars_list = self.chkRoleFiles(
-                    fullpath, in_rolename, file,
+                    WrappedStringReplaceAdminObj, fullpath, in_rolename, file,
                     # p1    p2     p3    p4    p5    p6
                     True, False, True, True, True, True,
                     in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
@@ -576,7 +591,7 @@ class CheckAnsibleRoleFiles():
 
             elif file == "files":
                 ret, ina_copyvars_list, ina_tpfvars_list = self.chkRoleFiles(
-                    fullpath, in_rolename, file,
+                    WrappedStringReplaceAdminObj, fullpath, in_rolename, file,
                     # p1     p2     p3    p4    p5     p6
                     False, False, True, True, False, False,
                     in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
@@ -584,7 +599,7 @@ class CheckAnsibleRoleFiles():
 
             elif file == "vars":
                 ret, ina_copyvars_list, ina_tpfvars_list = self.chkRoleFiles(
-                    fullpath, in_rolename, file,
+                    WrappedStringReplaceAdminObj, fullpath, in_rolename, file,
                     # p1     p2     p3    p4    p5     p6
                     False, False, True, True, False, True,
                     in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
@@ -593,7 +608,7 @@ class CheckAnsibleRoleFiles():
             elif file == "defaults":
                 defaults_his = True
                 ret, ina_copyvars_list, ina_tpfvars_list = self.chkRoleFiles(
-                    fullpath, in_rolename, file,
+                    WrappedStringReplaceAdminObj, fullpath, in_rolename, file,
                     # p1     p2     p3    p4    p5     p6
                     False, False, True, True, False, True,
                     in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
@@ -814,7 +829,7 @@ class CheckAnsibleRoleFiles():
         return True, ina_parent_vars_list, ina_vars_list, ina_array_vars_list, ina_varsval_list
 
     def chkRoleFiles(
-        self,
+        self, WrappedStringReplaceAdminObj,
         in_dir, in_rolename, in_dirname, in_get_rolevar, in_main_yml, in_etc_yml, in_sub_dir, in_get_var_tgt_dir,
         in_CharacterCodeCheck, in_get_copyvar, ina_copyvars_list, in_get_tpfvar, ina_tpfvars_list, ina_system_vars
     ):
@@ -823,7 +838,8 @@ class CheckAnsibleRoleFiles():
         処理内容
           roleの各ディレクトリとファイルが妥当かチェックする。
         パラメータ
-          in_base_dir:        ベースディレクトリ
+          WrappedStringReplaceAdminObj:  WrappedStringReplaceAdminクラス
+          in_base_dir:    ベースディレクトリ
           in_dir:         roleディレクトリ
           in_rolename     ロール名
           in_dirname      ディレクトリ名
@@ -877,16 +893,25 @@ class CheckAnsibleRoleFiles():
                 if file == "main.yml":
                     main_yml = True
 
-                # 変数初期化
-                file_vars_list = []
-                file_global_vars_list = []
-
                 # ファイルの内容を読込む
                 dataString = pathlib.Path(fullpath).read_text()
 
                 # ホスト変数の抜出が指定されている場合
                 if in_get_rolevar:
-                    # テンプレートからグローバル変数を抜出す
+                    # ファイル内で定義されていたITA独自変数を退避
+                    ita_vars = AnscConst.CannotValueAssign_ITA_sp_varlist
+                    file_vars_list = []
+                    varsLineArray = []
+                    FillterVars = True  # Fillterを含む変数の抜き出しなし
+                    WrappedStringReplaceAdminObj.SimpleFillterVerSearch(AnscConst.DF_HOST_VAR_HED, dataString, varsLineArray, file_vars_list, ita_vars, FillterVars)
+                    # ファイル内で定義されていた変数(ITA独自)を退避
+                    for var in file_vars_list:
+                        if in_rolename not in self.lva_itavarname:
+                            self.lva_itavarname[in_rolename] = {}
+                        if var in AnscConst.CannotValueAssign_ITA_sp_varlist:
+                            self.lva_itavarname[in_rolename][var] = 0
+
+                    # グローバル変数を抜出す
                     local_vars = []
                     varsLineArray = []
                     file_global_vars_list = []
@@ -896,15 +921,6 @@ class CheckAnsibleRoleFiles():
                         dataString, varsLineArray, file_global_vars_list, local_vars, FillterVars
                     )
 
-                    # ファイル内で定義されていた変数を退避
-                    for var in file_vars_list:
-                        if in_rolename not in self.lva_varname:
-                            self.lva_varname[in_rolename] = {}
-
-                        if var not in self.lva_varname[in_rolename]:
-                            self.lva_varname[in_rolename][var] = None
-
-                        self.lva_varname[in_rolename][var] = 0
 
                     # ファイル内で定義されていたグローバル変数を退避
                     for var in file_global_vars_list:
@@ -1175,6 +1191,7 @@ class CheckAnsibleRoleFiles():
         strErrMsg = ""
 
         # エラーメッセージのファイル名を生成
+        # Filename: /storage/org1/workspace-1/tmp/driver/ansible/LegacyRoleZipFileUpload_49189/roles/role_name1/defaults/main.yml
         ary = Filename.split('/roles/')
         if len(ary) <= 1:
             # ITAreadmeや読替表の場合
@@ -1182,23 +1199,24 @@ class CheckAnsibleRoleFiles():
 
         else:
             # role内のファイルの場合
-            del ary[0:2]
-            dispFilename = '/roles/'.join(ary)
+            # dispFilename: /roles/role_name1/defaults/main.yml
+            del ary[0]
+            dispFilename = "/roles/" + "/roles/".join(ary)
 
         boolRet = True
         yaml = pathlib.Path(Filename).read_bytes()
         # 変数定義ファイルが空の場合
         if len(yaml) == 0:
             return boolRet, strErrMsg
-            
+
         encode = detect(yaml)
         encode = encode['encoding'].upper()
-        if encode in ["ASCII", "UTF-8"]:
-            if yaml[0:3] == b'\xef\xbb\xbf':
-                strErrMsg = g.appmsg.get_api_message('MSG-10642', [dispFilename])
-                boolRet = False
+        # BOM有をチェック
+        if encode in ["UTF-8-SIG"]:
+            strErrMsg = g.appmsg.get_api_message('MSG-10642', [dispFilename])
+            boolRet = False
 
-        else:
+        elif encode not in ["ASCII", "UTF-8"]:
             strErrMsg = g.appmsg.get_api_message('MSG-10641', [dispFilename])
             boolRet = False
 
@@ -1650,7 +1668,7 @@ class DefaultVarsFileAnalysis():
                             and var_name in ina_vars_list[chk_pkg_name][chk_role_name] \
                             and ina_vars_list[chk_pkg_name][chk_role_name][var_name] is not None \
                             and (
-                                type(ina_vars_list[chk_pkg_name][chk_role_name][var_name]) not in (list, dict) 
+                                type(ina_vars_list[chk_pkg_name][chk_role_name][var_name]) not in (list, dict)
                                 or len(ina_vars_list[chk_pkg_name][chk_role_name][var_name]) > 0
                             ):
                                 # エラーになった変数とロールを退避
@@ -1690,7 +1708,7 @@ class DefaultVarsFileAnalysis():
                             and var_name in ina_def_array_vars_list[chk_pkg_name][chk_role_name] \
                             and ina_def_array_vars_list[chk_pkg_name][chk_role_name][var_name] is not None \
                             and (
-                                type(ina_def_array_vars_list[chk_pkg_name][chk_role_name][var_name]) not in (list, dict) 
+                                type(ina_def_array_vars_list[chk_pkg_name][chk_role_name][var_name]) not in (list, dict)
                                 or len(ina_def_array_vars_list[chk_pkg_name][chk_role_name][var_name]) > 0
                             ):
                                 # 多次元構造を比較する
@@ -1860,14 +1878,14 @@ class DefaultVarsFileAnalysis():
         処理内容
           ロールパッケージ内のPlaybookで定義されている変数がデェフォルト変数定義
           ファイルで定義されているか判定
-       
+
         パラメータ
           ina_play_vars_list:     ロールパッケージ内のPlaybookで定義している変数リスト
                                      [role名][変数名]=0
           ina_def_vars_list:      defalte変数ファイルの変数リスト
                                      非配列変数  ina_vars_list[ロール名][変数名] = 0;
                                      配列変数    ina_vars_list[ロール名][変数名] = array(配列変数名, ....)
-       
+
         戻り値
           true:   正常
           false:  異常
@@ -1905,7 +1923,6 @@ class DefaultVarsFileAnalysis():
         ina_user_vars_list, ina_user_vars_val_list,
         ina_array_vars_list, ina_user_array_vars_list
     ):
-
         """
         処理内容
           デフォルト定義変数ファイルとユーザー義変数ファイルに定義されている変数
@@ -1935,24 +1952,23 @@ class DefaultVarsFileAnalysis():
 
         del_user_vars_keys = []
 
-        if  ina_user_vars_list is not None \
-        and (type(ina_user_vars_list) not in (list, dict) or len(ina_user_vars_list) > 0):
-            # ユーザー変数定義ファイルに登録されている変数をキーにループ
+        if len(ina_user_vars_list) > 0:
+            # ユーザー変数定義ファイルに登録されている変数(通常変数・複数具体値変数)をキーにループ
             for var_name, vars_list in self.php_array(ina_user_vars_list):
-                # default変数定義ファイルに変数が登録されているか判定
-                if  var_name in ina_vars_list \
-                and ina_vars_list[var_name] is not None \
-                and (type(ina_vars_list[var_name]) not in (list, dict) or len(ina_vars_list[var_name]) > 0):
+                # default変数定義ファイルに変数(通常変数・複数具体値変数)が登録されているか判定
+                if  var_name in ina_vars_list:
                     # ユーザー変数定義ファイルとdefault変数定義ファイルの両方にある変数のルート
                     # default変数定義ファイルに変数が登録されている
 
                     # 変数の型を判定する
                     if ina_vars_list[var_name] != ina_user_vars_list[var_name]:
                         # 変数の型が一致しない場合はdefault変数定義ファイルの変数具体値情報から該当変数の情報を削除する
-                        del ina_vars_val_list[var_name]
+                        if var_name in ina_vars_val_list:
+                            del ina_vars_val_list[var_name]
 
                     # default変数定義ファイルの変数情報から該当変数の情報を削除する
-                    del ina_vars_list[var_name]
+                    if var_name in ina_vars_list:
+                        del ina_vars_list[var_name]
 
                     # default変数定義ファイルの変数情報にユーザー変数定義ファイルに
                     # 登録されている変数情報を追加
@@ -1964,10 +1980,8 @@ class DefaultVarsFileAnalysis():
                     del_user_vars_keys.append(var_name)
 
                 else:
-                    # default変数定義ファイルに変数が登録されていない
-
                     # default変数定義ファイルに多次元変数として登録されているか判定
-                    if var_name in ina_array_vars_list and len(ina_array_vars_list[var_name]) > 0:
+                    if var_name in ina_array_vars_list:
                         # ユーザー変数定義ファイルとdefault多次元変数定義ファイルの両方にある変数のルート
                         # default変数定義ファイルの多次元変数の情報を削除
                         del ina_array_vars_list[var_name]
@@ -1991,14 +2005,11 @@ class DefaultVarsFileAnalysis():
 
         del_user_vars_keys = []
 
-        if  ina_user_array_vars_list is not None \
-        and (type(ina_user_array_vars_list) not in (list, dict) or len(ina_user_array_vars_list) > 0):
+        if  len(ina_user_array_vars_list) > 0:
             # ユーザー変数定義ファイルに登録されている多次元変数をキーにループ
             for var_name, vars_list in self.php_array(ina_user_array_vars_list):
                 # default変数定義ファイルに多次元変数が登録されているか判定
-                if  var_name in ina_array_vars_list \
-                and ina_array_vars_list[var_name] is not None \
-                and (type(ina_array_vars_list[var_name]) not in (list, dict) or len(ina_array_vars_list[var_name]) > 0):
+                if  var_name in ina_array_vars_list:
                     # default変数定義ファイルに多次元変数が登録されている
 
                     # 変数構造が同じか判定する
@@ -2013,11 +2024,11 @@ class DefaultVarsFileAnalysis():
                     if not ret:
                         # 変数構造が一致しない
                         # ユーザー変数定義ファイルの情報をdefault変数定義ファイルに設定
-                        del ina_array_vars_list[var_name]
+                        # del ina_array_vars_list[var_name]
                         ina_array_vars_list[var_name] = ina_user_array_vars_list[var_name]
 
                         # 具体値はなしにする
-                        del ina_array_vars_list[var_name]['VAR_VALUE']
+                        # del ina_array_vars_list[var_name]['VAR_VALUE']
                         ina_array_vars_list[var_name]['VAR_VALUE'] = []
                         # ユーザー多次元変数定義ファイルとdefault多次元変数定義ファイルの両方にあり型が一致しない変数のルート
 
@@ -2033,7 +2044,7 @@ class DefaultVarsFileAnalysis():
                     # default変数定義ファイルに多次元変数が登録されていない
 
                     # default変数定義ファイルに変数が登録されているか判定
-                    if var_name in ina_vars_list and len(ina_vars_list[var_name]) > 0:
+                    if var_name in ina_vars_list:
                         # ユーザー多次元変数定義ファイルとdefault変数定義ファイルの両方にある変数のルート
                         # default変数定義ファイルに変数が登録されている
 
@@ -2041,14 +2052,15 @@ class DefaultVarsFileAnalysis():
                         del ina_vars_list[var_name]
 
                         # default変数定義ファイルの変数具体値情報から該当変数の情報を削除する
-                        del ina_vars_val_list[var_name]
+                        if var_name in ina_vars_val_list:
+                            del ina_vars_val_list[var_name]
 
                         # default変数定義ファイルの変数情報にユーザー変数定義ファイルに
                         # 登録されている多次元変数情報を追加
                         ina_array_vars_list[var_name] = ina_user_array_vars_list[var_name]
 
                         # ユーザー変数定義ファイルの変数具体値情報は使わない
-                        del ina_array_vars_list[var_name]['VAR_VALUE']
+                        # del ina_array_vars_list[var_name]['VAR_VALUE']
                         ina_array_vars_list[var_name]['VAR_VALUE'] = []
 
                         # ユーザー変数定義ファイルの変数情報から削除
@@ -2197,7 +2209,7 @@ class DefaultVarsFileAnalysis():
           in_errmsg:                  エラー時のエラーメッセージ
           in_f_name:                  エラー時のファイル名
           in_f_line:                  エラー時の行番号
-          
+
         戻り値
           true: 正常  false:異常
         """
@@ -2361,7 +2373,7 @@ class DefaultVarsFileAnalysis():
             in_error_code = "MSG-10301"
             in_line = inspect.currentframe().f_lineno
             return False, ina_vars_list, ina_varval_list, ina_array_col_count_list, in_error_code, in_line, in_col_count, in_assign_count
-        
+
         for var, val in self.php_array(ina_parent_var_array):
             # 多次元複数具体値の判定
             # VAR_list:
@@ -2406,10 +2418,10 @@ class DefaultVarsFileAnalysis():
                 #                    [item1] =>
                 #                    [item2] => a2
                 #                )
-                if var >= 99999999:
-                    # 繰返構造の繰返数が99999999以上あった
+                if var > 1024:
+                    # 繰返構造の繰返数が1024以上あった
                     if array_f == "I":
-                        # MSG-10444 = "繰返構造の繰返数が99999999を超えてた定義です。{}"
+                        # MSG-10444 = "繰返構造の繰返数が1024を超えてた定義です。{}"
                         in_error_code = "MSG-10444"
                         in_line = inspect.currentframe().f_lineno
                         return False, ina_vars_list, ina_varval_list, ina_array_col_count_list, in_error_code, in_line, in_col_count, in_assign_count
@@ -2789,7 +2801,7 @@ class DefaultVarsFileAnalysis():
             if self.is_num(var):
                 if var == 0:
                     break
-            
+
         return True, ina_vars_chain_list, in_error_code, in_line, in_col_count, in_assign_count, in_chl_var_key
 
     def MakeMultiArrayToLastVarChainArray(
@@ -2861,7 +2873,7 @@ class DefaultVarsFileAnalysis():
                     info_array['MAX_COL_SEQ'] = "0"
 
                 ina_vars_chain_list.append(info_array)
-        
+
         # 代入値管理系で表示する変数をマークする。列順序が必要な変数をマークする
         row_count = len(ina_vars_chain_list)
         var_key_list = []
@@ -2989,7 +3001,7 @@ class DefaultVarsFileAnalysis():
                 in_errmsg = '%s\n%s' % (in_errmsg, g.appmsg.get_api_message("MSG-10516", [os.path.basename(in_filepath), line]))
                 ret_code = False
                 continue
-            
+
             # 任意変数が重複登録の二重登録判定
             if  user_var_name in ina_User2ITA_var_list \
             and ina_User2ITA_var_list[user_var_name] is not None \
@@ -3293,7 +3305,7 @@ class DefaultVarsFileAnalysis():
         処理内容
           VarPosAnalysisで変数定義を解析する元データの種別を設定する
           (テンプレート変数の変数定義、default変数定義,ITA-radme)
-       
+
         パラメータ
           種別
           DF_DEF_VARS:    default変数定義
@@ -3413,7 +3425,7 @@ class DefaultVarsFileAnalysis():
                 # ITAで扱う変数
                 var_type = self.LC_VAR_TYPE_ITA
 
-            #elif pattern['type'] == "USER":  # ToDo DF_VAR_TYPE_USER
+            #elif pattern['type'] == "USER":
             #    # 読替表にある変数はITA変数として扱う
             #    if len(ina_User2ITA_var_list[ParentVarName]) > 0:
             #        # 読替変数
@@ -3676,6 +3688,10 @@ class YAMLFileAnalysis():
             error_code = "MSG-10644"
             error_ary = [tgt_role_pkg_name, tgt_role_name, tgt_file_name]
 
+            # MSG-10936 = "変数名が定義されていません。(ロールパッケージ名:{} role:{} file:{})",
+            list_error_code = 'MSG-10936'
+            list_error_ary = [tgt_role_pkg_name, tgt_role_name, tgt_file_name]
+
         elif in_mode == AnscConst.LC_RUN_MODE_VARFILE:
             # 変数定義の場所(テンプレート管理  変数定義)を設定
             chkObj.setVariableDefineLocation(AnscConst.DF_TEMP_VARS)
@@ -3684,10 +3700,19 @@ class YAMLFileAnalysis():
             error_code = "MSG-10645"
             error_ary = [in_role_pkg_name]
 
+            # MSG-10937 = "変数名が定義されていません。(テンプレート変数:{})",
+            list_error_code = 'MSG-10937'
+            list_error_ary = [in_role_pkg_name]
+
         obj = YamlParse()
         yaml_parse_array = obj.Parse(defvarfile)
         errmsg = obj.GetLastError()
         obj = None
+
+        if type(yaml_parse_array) is list:
+            errmsg = "%s\n%s" % (errmsg, g.appmsg.get_api_message(list_error_code, list_error_ary))
+            self.SetLastError(os.path.basename(inspect.currentframe().f_code.co_filename), inspect.currentframe().f_lineno, errmsg)
+            return False, in_parent_vars_list, ina_vars_list, ina_array_vars_list, ina_varval_list
 
         if yaml_parse_array is None:
             yaml_parse_array = {}
@@ -4309,11 +4334,12 @@ class VarStructAnalysisFileAccess():
         arysystemvars = []
 
         # ロールパッケージファイル(ZIP)を解析するクラス生成
-        # ToDo fileuploadカラムのパスが変更になっている
         roleObj = CheckAnsibleRoleFiles(self.lv_objMTS)
 
         # ロールパッケージファイル(ZIP)の解凍先
-        outdir = "%s/LegacyRoleZipFileUpload_%s" % (get_AnsibleDriverTmpPath(), os.getpid())
+        # outdir = "%s/LegacyRoleZipFileUpload_%s" % (get_AnsibleDriverTmpPath(), os.getpid())
+        # /storageは遅いので/tmpに変更
+        outdir = "%s/LegacyRoleZipFileUpload_%s" % (get_AnsibleDriverHpTmpPath(), os.getpid())
 
         def_vars_list = {}
         err_vars_list = {}
@@ -4324,6 +4350,9 @@ class VarStructAnalysisFileAccess():
         User2ITA_var_list = {}
         comb_err_vars_list = {}
         role_name_list = {}
+
+        # 例外等が発生した場合でもディレクトリを削除するようにする為、ディレクトリ名を退避
+        g.AnsibleCreateFiles.append(outdir)
 
         # ロールパッケージファイル(ZIP)の解凍
         if roleObj.ZipextractTo(strTempFileFullname, outdir) == False:
@@ -4450,7 +4479,6 @@ class VarStructAnalysisFileAccess():
                     strVarsList = row['VARS_LIST']
 
                     # 変数定義の解析結果を取得
-                    # ToDo 別処理に置き換え(TemplateVarsStructAnalFileAccess)
                     """
                     fileObj = TemplateVarsStructAnalFileAccess(self.lv_objMTS, self.lv_objDBCA)
 
